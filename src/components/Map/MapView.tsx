@@ -39,6 +39,15 @@ const MapView = () => {
     const [newSpotPosition, setNewSpotPosition] = useState<{ lat: number, lng: number } | null>(null);
     const [editingSpot, setEditingSpot] = useState<Spot | null>(null);
 
+    // Refs for Event Listeners to access current state
+    const selectedSpotRef = useRef(selectedSpot);
+    const newSpotPositionRef = useRef(newSpotPosition);
+
+    useEffect(() => {
+        selectedSpotRef.current = selectedSpot;
+        newSpotPositionRef.current = newSpotPosition;
+    }, [selectedSpot, newSpotPosition]);
+
     // Initialize Map
     useEffect(() => {
         if (!mapContainer.current) return;
@@ -60,6 +69,19 @@ const MapView = () => {
 
             // Click to add spot (Only need to bind once)
             map.current.on('click', (e) => {
+                // Check if we are currently viewing a spot or adding a spot using refs
+                // We need to use refs because this callback is defined once and closes over initial state
+                if (selectedSpotRef.current) {
+                    setSelectedSpot(null);
+                    return; // Stop here, don't open add form
+                }
+
+                if (newSpotPositionRef.current) {
+                    setNewSpotPosition(null);
+                    return;
+                }
+
+                // If nothing is open, THEN allow adding a new spot
                 setSelectedSpot(null);
                 setNewSpotPosition({
                     lat: e.lngLat.lat,

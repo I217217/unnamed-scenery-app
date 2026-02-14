@@ -1,9 +1,9 @@
 import { db, storage } from '../lib/firebase';
 import {
-    collection, addDoc, updateDoc, deleteDoc, doc,
-    onSnapshot, query, orderBy, Timestamp, getDocs
+    collection, deleteDoc, doc,
+    onSnapshot, query, orderBy, Timestamp, setDoc
 } from 'firebase/firestore';
-import { ref, uploadString, getDownloadURL, deleteObject, uploadBytes } from 'firebase/storage';
+import { ref, uploadString, getDownloadURL, uploadBytes } from 'firebase/storage';
 import type { Spot } from '../data/spots';
 
 const COLLECTION_NAME = 'spots';
@@ -14,9 +14,6 @@ const convertToSpot = (doc: any): Spot => {
     return {
         id: doc.id,
         ...data,
-        // Convert Timestamp to ISO string if needed, or keep as is if Spot supports it
-        // For simplicity, we assume Spot uses strings for IDs.
-        // If 'createdAt' exists: createdAt: data.createdAt?.toDate().toISOString() 
     } as Spot;
 };
 
@@ -58,7 +55,9 @@ export const saveSpotToFirebase = async (spot: Spot, imageFile?: File | string, 
         // Ensure we have an ID for the folder structure even if it's new
         // Ideally, we let Firestore generate ID, but to keep folder strict, we might want a UUID.
         // Let's use the spot.id if valid, or a timestamp-based ID for NEW spots.
-        const docId = spot.id && spot.id.length > 10 ? spot.id : doc(collection(db, COLLECTION_NAME)).id;
+        const originalId = spot.id;
+        const isNew = !originalId || originalId.length < 10;
+        const docId = isNew ? doc(collection(db, COLLECTION_NAME)).id : originalId;
 
         // Upload Image
         if (imageFile) {
@@ -89,24 +88,18 @@ export const saveSpotToFirebase = async (spot: Spot, imageFile?: File | string, 
             updatedAt: Timestamp.now()
         };
 
-        // If new (based on check), add 'createdAt'
-        // But since we might be overwriting, let's use setDoc via doc() ref to be safe with custom IDs
-        // or just use update/add. 
-        // Simplest: use setDoc (merge) if we have ID, or addDoc if not.
-
-        // Actually, let's check if it exists or just use setDoc with merge.
         const docRef = doc(db, COLLECTION_NAME, docId);
 
-        // We can't easily check existence without reading, but setDoc with merge is safe.
-        // However, for "createdAt", we only want it on creation.
-        // Let's just include it in data if it's missing from input spot object?
+        const payload: any = { ...spotData };
+        // Only set createdAt if NEW (or if we explicitly want to overwrite, but safer not to)
+        // If updating, createdAt is preserved by merge: true if not included
+        if (isNew) {
+            payload.createdAt = Timestamp.now();
+        }
 
-        await import('firebase/firestore').then(({ setDoc }) => {
-            setDoc(docRef, {
-                ...spotData,
-                createdAt: spotData.createdAt || Timestamp.now()
-            }, { merge: true });
-        });
+        await setDoc(docRef, payload, { merge: true });
+
+        return docId;
 
         return docId;
 
