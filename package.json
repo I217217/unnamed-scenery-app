@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "firebase": "^12.9.0",
     "framer-motion": "^12.25.0",
     "howler": "^2.2.4",
     "mapbox-gl": "^3.17.0",

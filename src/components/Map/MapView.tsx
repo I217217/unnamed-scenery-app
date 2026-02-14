@@ -3,14 +3,14 @@ import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { type Spot, spots as initialSpots } from '../../data/spots';
+import { type Spot } from '../../data/spots';
 import MemoryPin from './MemoryPin';
 import AddSpotForm from '../UI/AddSpotForm';
 import SpotDetail from '../UI/SpotDetail';
 import AudioPlayer from '../UI/AudioPlayer';
 import DataControls from '../UI/DataControls';
 import { AnimatePresence } from 'framer-motion';
-import { saveSpotsToDB, loadSpotsFromDB } from '../../utils/db';
+import { subscribeToSpots, saveSpotToFirebase, deleteSpotFromFirebase } from '../../utils/firebaseDb';
 
 // Token from environment
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -24,25 +24,15 @@ const MapView = () => {
     const [lat] = useState(35.6895);
     const [zoom] = useState(12);
 
-    const [allSpots, setAllSpots] = useState<Spot[]>(initialSpots);
-    const [isLoaded, setIsLoaded] = useState(false);
+    const [allSpots, setAllSpots] = useState<Spot[]>([]);
 
-    // Load from DB on mount
+    // Real-time Firebase Subscription
     useEffect(() => {
-        loadSpotsFromDB().then(saved => {
-            if (saved && saved.length > 0) {
-                setAllSpots(saved);
-            }
-        }).catch(err => console.error("Failed to load from DB", err))
-            .finally(() => setIsLoaded(true)); // Enable saving after load attempt
+        const unsubscribe = subscribeToSpots((updatedSpots) => {
+            setAllSpots(updatedSpots);
+        });
+        return () => unsubscribe();
     }, []);
-
-    // Save to DB on change (only after initial load)
-    useEffect(() => {
-        if (!isLoaded) return;
-        saveSpotsToDB(allSpots).catch(err => console.error("Failed to save to DB", err));
-    }, [allSpots, isLoaded]);
-
 
 
     const [selectedSpot, setSelectedSpot] = useState<Spot | null>(null);
@@ -344,15 +334,17 @@ const MapView = () => {
         <div style={{ width: '100%', height: '100%' }}>
             <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
 
-            {/* Data Backup/Restore Controls */}
+            {/* Data Backup/Restore Controls (Legacy/Migration) */}
             <DataControls
                 spots={allSpots}
                 onImport={(importedSpots) => {
-                    setAllSpots(importedSpots);
-                    // Also save to DB immediately to persist the restoration
-                    saveSpotsToDB(importedSpots).then(() => {
-                        console.log("Restored data saved to DB");
-                    });
+                    // Manual Migration Logic: Save imported spots to Firebase one by one
+                    if (window.confirm("インポートされたデータをクラウド(Firebase)に保存しますか？")) {
+                        importedSpots.forEach(async (spot) => {
+                            await saveSpotToFirebase(spot);
+                        });
+                        alert("バックグラウンドでクラウドへの保存を開始しました。");
+                    }
                 }}
             />
 
@@ -370,11 +362,6 @@ const MapView = () => {
                             map.current?.easeTo({ pitch: 0, zoom: 13, duration: 1500 });
                         }}
                         onEdit={() => {
-                            // Determine screen coordinates to pass (mocking screen center or keeping generic)
-                            // For simplicity, we just trigger the form.
-                            // We reuse newSpotPosition state to trigger form, but we need a way to pass data.
-                            // Refactoring newSpotPosition to hold data or creating a separate edit state is better.
-                            // Let's use a new state 'editingSpot'
                             setEditingSpot(selectedSpot);
                             setSelectedSpot(null); // Close detail
                         }}
@@ -396,23 +383,16 @@ const MapView = () => {
                         }}
                         onDelete={() => {
                             if (editingSpot) {
-                                setAllSpots(prev => prev.filter(s => s.id !== editingSpot.id));
+                                deleteSpotFromFirebase(editingSpot.id);
                                 setEditingSpot(null);
                                 setSelectedSpot(null);
                             }
                         }}
-                        onSave={(savedSpot) => {
-                            if (editingSpot) {
-                                // Update existing
-                                setAllSpots(prev => prev.map(s => s.id === savedSpot.id ? savedSpot : s));
-                                setEditingSpot(null);
-                                setSelectedSpot(savedSpot); // Re-open updated detail
-                            } else {
-                                // Create new
-                                setAllSpots(prev => [...prev, savedSpot]);
-                                setNewSpotPosition(null);
-                                setSelectedSpot(savedSpot); // Open new detail
-                            }
+                        onSave={async (savedSpot, imageFile, audioFile) => {
+                            await saveSpotToFirebase(savedSpot, imageFile, audioFile);
+                            // State updates are handled by the subscription
+                            setNewSpotPosition(null);
+                            setEditingSpot(null);
 
                             // Optionally fly to spot
                             map.current?.flyTo({
